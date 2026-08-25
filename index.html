@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<title>Ledger</title>
+<meta name="theme-color" content="#14181c">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<style>
+  :root{
+    --ink:#14181c;
+    --ink-soft:#1f262d;
+    --paper:#f4f1e8;
+    --mint:#00c896;
+    --mint-dim:#0a3d31;
+    --amber:#f5a623;
+    --line:#2c343c;
+    --muted:#7c8892;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--ink);
+    color:var(--paper);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    min-height:100vh;
+    padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom) 0;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+  }
+  .app{
+    width:100%;
+    max-width:460px;
+    padding:28px 20px 40px;
+  }
+  .brand{
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    margin-bottom:22px;
+    gap:12px;
+  }
+  .brand h1{
+    font-size:22px;
+    letter-spacing:0.02em;
+    margin:0;
+    font-weight:700;
+  }
+  .dot{
+    width:8px;height:8px;border-radius:50%;
+    background:var(--mint);
+    display:inline-block;
+    margin-right:8px;
+    box-shadow:0 0 8px var(--mint);
+  }
+  .brand small{color:var(--muted); font-size:12px; letter-spacing:0.08em; text-transform:uppercase;}
+  .brand-actions{
+    display:flex;
+    align-items:center;
+    gap:10px;
+  }
+  .key-btn{
+    border:1px solid var(--line);
+    background:var(--ink-soft);
+    color:var(--paper);
+    border-radius:999px;
+    padding:7px 11px;
+    font-size:12px;
+    font-weight:700;
+    cursor:pointer;
+  }
+
+  .unlock-screen{
+    position:fixed;
+    inset:0;
+    z-index:10;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    padding:24px 20px;
+    background:var(--ink);
+  }
+  body.locked .unlock-screen{display:flex;}
+  body.locked .app{display:none;}
+  .unlock-card{
+    width:100%;
+    max-width:420px;
+  }
+  .unlock-card h1{
+    margin:0 0 8px;
+    font-size:28px;
+    letter-spacing:0.01em;
+  }
+  .unlock-card p{
+    margin:0 0 22px;
+    color:var(--muted);
+    line-height:1.45;
+    font-size:14px;
+  }
+  .unlock-field{
+    background:var(--ink-soft);
+    border:1px solid var(--line);
+    border-radius:16px;
+    padding:14px 16px;
+  }
+  .unlock-field label{
+    display:block;
+    font-size:11px;
+    letter-spacing:0.12em;
+    text-transform:uppercase;
+    color:var(--muted);
+    margin-bottom:8px;
+  }
+  .unlock-field input{
+    width:100%;
+    background:transparent;
+    border:none;
+    outline:none;
+    color:var(--paper);
+    font-size:17px;
+    font-family:inherit;
+  }
+  .unlock-actions{
+    display:flex;
+    gap:10px;
+    margin-top:14px;
+  }
+  .unlock-actions .submit{margin-top:0;}
+  .ghost-btn{
+    border:1px solid var(--line);
+    background:transparent;
+    color:var(--paper);
+    border-radius:16px;
+    padding:0 16px;
+    font-size:14px;
+    font-weight:700;
+    cursor:pointer;
+  }
+
+  .amount-field{
+    background:var(--ink-soft);
+    border:1px solid var(--line);
+    border-radius:18px;
+    padding:22px 20px 18px;
+    margin-bottom:14px;
+  }
+  .amount-field label{
+    display:block;
+    font-size:11px;
+    letter-spacing:0.12em;
+    text-transform:uppercase;
+    color:var(--muted);
+    margin-bottom:6px;
+  }
+  .amount-row{
+    display:flex;
+    align-items:center;
+    gap:6px;
+  }
+  .amount-row span{
+    font-size:30px;
+    color:var(--muted);
+    font-family:"SFMono-Regular",Menlo,Consolas,monospace;
+  }
+  .amount-row input{
+    flex:1;
+    background:transparent;
+    border:none;
+    outline:none;
+    color:var(--paper);
+    font-size:38px;
+    font-family:"SFMono-Regular",Menlo,Consolas,monospace;
+    font-weight:600;
+    width:100%;
+    padding:0;
+  }
+  .amount-row input::placeholder{color:var(--line);}
+
+  .field{
+    background:var(--ink-soft);
+    border:1px solid var(--line);
+    border-radius:16px;
+    padding:14px 16px;
+    margin-bottom:12px;
+  }
+  .field label{
+    display:block;
+    font-size:11px;
+    letter-spacing:0.12em;
+    text-transform:uppercase;
+    color:var(--muted);
+    margin-bottom:8px;
+  }
+  .field input[type=date],
+  .field textarea{
+    width:100%;
+    background:transparent;
+    border:none;
+    outline:none;
+    color:var(--paper);
+    font-size:16px;
+    font-family:inherit;
+    resize:none;
+  }
+  .field textarea{min-height:44px; line-height:1.4;}
+  .field input[type=date]{
+    color-scheme:dark;
+  }
+
+  .chips{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+  }
+  .chip{
+    padding:9px 14px;
+    border-radius:999px;
+    border:1px solid var(--line);
+    background:transparent;
+    color:var(--paper);
+    font-size:13.5px;
+    cursor:pointer;
+    transition:all .15s ease;
+  }
+  .chip.active{
+    background:var(--mint);
+    border-color:var(--mint);
+    color:var(--ink);
+    font-weight:700;
+  }
+  .chip-custom{
+    flex:1;
+    min-width:110px;
+    background:transparent;
+    border:1px dashed var(--line);
+    border-radius:999px;
+    padding:9px 14px;
+    color:var(--paper);
+    font-size:13.5px;
+    outline:none;
+  }
+  .chip-custom::placeholder{color:var(--muted);}
+
+  .submit{
+    width:100%;
+    padding:17px;
+    margin-top:18px;
+    border:none;
+    border-radius:16px;
+    background:var(--mint);
+    color:var(--ink);
+    font-size:16px;
+    font-weight:700;
+    letter-spacing:0.02em;
+    cursor:pointer;
+    transition:transform .1s ease, opacity .15s ease;
+  }
+  .submit:active{transform:scale(0.97);}
+  .submit:disabled{opacity:0.5;}
+
+  .status{
+    text-align:center;
+    font-size:13px;
+    color:var(--muted);
+    margin-top:12px;
+    min-height:18px;
+  }
+  .status.err{color:#ff6b6b;}
+  .status.ok{color:var(--mint);}
+
+  .tape{
+    margin-top:30px;
+    border-top:1px dashed var(--line);
+    padding-top:18px;
+  }
+  .tape h2{
+    font-size:11px;
+    letter-spacing:0.14em;
+    text-transform:uppercase;
+    color:var(--muted);
+    margin:0 0 12px;
+  }
+  .receipt-row{
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    padding:10px 0;
+    border-bottom:1px dotted var(--line);
+    font-family:"SFMono-Regular",Menlo,Consolas,monospace;
+    animation:printIn .3s ease;
+  }
+  @keyframes printIn{
+    from{opacity:0; transform:translateY(-6px);}
+    to{opacity:1; transform:translateY(0);}
+  }
+  .receipt-row .rr-left{display:flex; flex-direction:column; gap:2px;}
+  .receipt-row .rr-head{font-size:13.5px; color:var(--paper); font-family:-apple-system,sans-serif;}
+  .receipt-row .rr-desc{font-size:11.5px; color:var(--muted); font-family:-apple-system,sans-serif;}
+  .receipt-row .rr-amt{font-size:15px; color:var(--mint); font-weight:600;}
+  .empty{color:var(--muted); font-size:13px; padding:8px 0;}
+</style>
+</head>
+<body class="locked">
+<div class="unlock-screen" id="unlock-screen">
+  <form class="unlock-card" id="unlock-form">
+    <h1><span class="dot"></span>Ledger</h1>
+    <p>Enter your private Ledger access key. It will be saved only on this device.</p>
+    <div class="unlock-field">
+      <label>Access key</label>
+      <input type="password" id="access-key-input" autocomplete="current-password" required>
+    </div>
+    <div class="unlock-actions">
+      <button type="submit" class="submit">Unlock</button>
+      <button type="button" class="ghost-btn" id="clear-key-btn">Clear</button>
+    </div>
+    <div class="status" id="unlock-status"></div>
+  </form>
+</div>
+
+<div class="app">
+
+  <div class="brand">
+    <h1><span class="dot"></span>Ledger</h1>
+    <div class="brand-actions">
+      <small id="today-label"></small>
+      <button type="button" class="key-btn" id="change-key-btn">Key</button>
+    </div>
+  </div>
+
+  <form id="expense-form">
+    <div class="amount-field">
+      <label>Amount</label>
+      <div class="amount-row">
+        <span>₹</span>
+        <input type="number" id="amount" inputmode="decimal" step="0.01" min="0" placeholder="0.00" required>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Expense head</label>
+      <div class="chips" id="chip-group">
+        <button type="button" class="chip" data-head="Food">Food</button>
+        <button type="button" class="chip" data-head="Transport">Transport</button>
+        <button type="button" class="chip" data-head="Bills">Bills</button>
+        <button type="button" class="chip" data-head="Shopping">Shopping</button>
+        <button type="button" class="chip" data-head="Health">Health</button>
+        <input type="text" class="chip-custom" id="chip-custom" placeholder="Other…">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Date</label>
+      <input type="date" id="date" required>
+    </div>
+
+    <div class="field">
+      <label>Description</label>
+      <textarea id="description" placeholder="What was this for?"></textarea>
+    </div>
+
+    <button type="submit" class="submit" id="submit-btn">Add to ledger</button>
+    <div class="status" id="status"></div>
+  </form>
+
+  <div class="tape">
+    <h2>Printed this session</h2>
+    <div id="receipt-list">
+      <div class="empty">Nothing added yet — your first entry prints here.</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const ENDPOINT = "https://script.google.com/macros/s/AKfycbyGeFcyvOo4UIpMfDgsfPnzbCwnZ49RR8WoNaE07kpdUaA_zVvV4wewY38HtFMMR-ZtdA/exec";
+const ACCESS_KEY_STORAGE = "ledger.accessKey";
+
+const unlockForm = document.getElementById('unlock-form');
+const accessKeyInput = document.getElementById('access-key-input');
+const clearKeyBtn = document.getElementById('clear-key-btn');
+const changeKeyBtn = document.getElementById('change-key-btn');
+const unlockStatus = document.getElementById('unlock-status');
+const form = document.getElementById('expense-form');
+const dateInput = document.getElementById('date');
+const amountInput = document.getElementById('amount');
+const descInput = document.getElementById('description');
+const chipGroup = document.getElementById('chip-group');
+const chipCustom = document.getElementById('chip-custom');
+const submitBtn = document.getElementById('submit-btn');
+const statusEl = document.getElementById('status');
+const receiptList = document.getElementById('receipt-list');
+const todayLabel = document.getElementById('today-label');
+
+let selectedHead = "";
+let sessionEntries = [];
+let accessKey = localStorage.getItem(ACCESS_KEY_STORAGE) || "";
+
+function lockApp(message = ""){
+  document.body.classList.add("locked");
+  unlockStatus.textContent = message;
+  unlockStatus.className = message ? "status err" : "status";
+  accessKeyInput.value = "";
+  setTimeout(() => accessKeyInput.focus(), 0);
+}
+
+function unlockApp(key){
+  accessKey = key.trim();
+  localStorage.setItem(ACCESS_KEY_STORAGE, accessKey);
+  document.body.classList.remove("locked");
+  unlockStatus.textContent = "";
+  unlockStatus.className = "status";
+}
+
+function clearSavedKey(message = "Saved key cleared. Enter the current key to unlock."){
+  accessKey = "";
+  localStorage.removeItem(ACCESS_KEY_STORAGE);
+  lockApp(message);
+}
+
+if (accessKey){
+  document.body.classList.remove("locked");
+}
+
+unlockForm.addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  const key = accessKeyInput.value.trim();
+  if (!key){
+    unlockStatus.textContent = "Enter your Ledger access key.";
+    unlockStatus.className = "status err";
+    return;
+  }
+  unlockApp(key);
+  amountInput.focus();
+});
+
+clearKeyBtn.addEventListener('click', () => clearSavedKey());
+changeKeyBtn.addEventListener('click', () => clearSavedKey("Enter a new Ledger access key."));
+
+function todayISO(){
+  const d = new Date();
+  const tz = d.getTimezoneOffset() * 60000;
+  return new Date(d - tz).toISOString().slice(0,10);
+}
+dateInput.value = todayISO();
+todayLabel.textContent = new Date().toLocaleDateString('en-IN', { day:'numeric', month:'short' });
+
+chipGroup.querySelectorAll('.chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    chipGroup.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+    selectedHead = chip.dataset.head;
+    chipCustom.value = "";
+  });
+});
+chipCustom.addEventListener('input', () => {
+  if (chipCustom.value.trim()){
+    chipGroup.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    selectedHead = chipCustom.value.trim();
+  }
+});
+
+function renderReceipts(){
+  if (sessionEntries.length === 0){
+    receiptList.innerHTML = '<div class="empty">Nothing added yet — your first entry prints here.</div>';
+    return;
+  }
+  receiptList.innerHTML = sessionEntries.slice().reverse().map(e => `
+    <div class="receipt-row">
+      <div class="rr-left">
+        <span class="rr-head">${escapeHtml(e.head)}</span>
+        ${e.description ? `<span class="rr-desc">${escapeHtml(e.description)}</span>` : ''}
+      </div>
+      <span class="rr-amt">₹${Number(e.amount).toFixed(2)}</span>
+    </div>
+  `).join('');
+}
+function escapeHtml(s){
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+form.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  statusEl.textContent = "";
+  statusEl.className = "status";
+
+  const head = selectedHead || chipCustom.value.trim();
+  const amount = amountInput.value;
+  const date = dateInput.value;
+  const description = descInput.value.trim();
+
+  if (!accessKey){
+    lockApp("Enter your Ledger access key before saving.");
+    return;
+  }
+  if (!head){
+    statusEl.textContent = "Pick or type an expense head.";
+    statusEl.className = "status err";
+    return;
+  }
+  if (!amount || Number(amount) <= 0){
+    statusEl.textContent = "Enter an amount.";
+    statusEl.className = "status err";
+    return;
+  }
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Saving…";
+
+  try {
+    const res = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ date, head, amount, description, accessKey })
+    });
+
+    const raw = await res.text();
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch (e) { /* not JSON */ }
+
+    if (!res.ok){
+      statusEl.textContent = `Server error (${res.status}): ${raw.slice(0,120)}`;
+      statusEl.className = "status err";
+      return;
+    }
+    if (raw.includes("accounts.google.com") || raw.toLowerCase().includes("sign in")){
+      statusEl.textContent = "Blocked by Google sign-in — deployment access isn't set to 'Anyone'.";
+      statusEl.className = "status err";
+      return;
+    }
+    if (parsed && parsed.status !== "success"){
+      statusEl.textContent = `Sheet says: ${JSON.stringify(parsed).slice(0,120)}`;
+      statusEl.className = "status err";
+      if (String(parsed.message || "").toLowerCase().includes("unauthorized")){
+        clearSavedKey("That access key was rejected. Enter the current key.");
+      }
+      return;
+    }
+    if (!parsed){
+      statusEl.textContent = `Unexpected response: ${raw.slice(0,120)}`;
+      statusEl.className = "status err";
+      return;
+    }
+
+    sessionEntries.push({ head, amount, description });
+    renderReceipts();
+
+    statusEl.textContent = "Saved to your sheet.";
+    statusEl.className = "status ok";
+
+    amountInput.value = "";
+    descInput.value = "";
+    chipCustom.value = "";
+    selectedHead = "";
+    chipGroup.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    dateInput.value = todayISO();
+    amountInput.focus();
+  } catch (err){
+    statusEl.textContent = `Network/CORS error: ${err.message}`;
+    statusEl.className = "status err";
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Add to ledger";
+  }
+});
+</script>
+
+<script>
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./service-worker.js").catch(console.error);
+  });
+}
+</script>
+
+</body>
+</html>
+

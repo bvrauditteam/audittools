@@ -1,0 +1,19 @@
+{
+  "name": "Ledger",
+  "short_name": "Ledger",
+  "description": "Simple expense ledger",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#14181c",
+  "theme_color": "#14181c",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
