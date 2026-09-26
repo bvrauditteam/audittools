@@ -7,6 +7,9 @@ on:
       - ".github/workflows/fast-lookup.yml"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -145,6 +148,19 @@ jobs:
           if (-not $p.HasExited) { throw "Old instance did not quit on takeover" }
           if ($p2.HasExited -or $running.Count -ne 1) { throw "New instance is not the only one running" }
           Stop-Process $p2
+
+      - name: Publish exe to the fast-lookup-exe branch
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          mkdir /tmp/out && cp fast-lookup/FastLookup.exe /tmp/out/
+          cd /tmp/out
+          git init -q -b fast-lookup-exe
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add FastLookup.exe
+          git commit -q -m "FastLookup.exe built from ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" fast-lookup-exe
 
       - uses: actions/upload-artifact@v4
         with:
