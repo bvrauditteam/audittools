@@ -1,0 +1,4 @@
+# Lookup data is internal: keep it off this public repo.
+*.json
+data/
+FastLookup.exe

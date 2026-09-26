@@ -1,0 +1,72 @@
+name: Fast Lookup (Windows build)
+
+on:
+  push:
+    paths:
+      - "fast-lookup/**"
+      - ".github/workflows/fast-lookup.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build FastLookup.exe
+        shell: cmd
+        run: fast-lookup\build.bat ci
+
+      - name: Smoke test (sample data, edge hover, screenshots)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          # Fake sample rows only; real data never goes in this public repo.
+          $data = Join-Path $env:LOCALAPPDATA "FastFinanceLookup\data"
+          New-Item -ItemType Directory -Force $data | Out-Null
+          '[{"G/L account":"1000000010","Long Text":"SAMPLE SHARE CAPITAL","":""},{"G/L account":"2050342911","Long Text":"SAMPLE BANK - CW TEST","":""}]' |
+            Set-Content -Encoding UTF8 (Join-Path $data "sample_gl.json")
+          '[{"Region":"EAST","RO":"RO_TEST","name":"Testpur","plant":"9999","profit center":"99992000","profit center name":"Regional Office Testpur","":""}]' |
+            Set-Content -Encoding UTF8 (Join-Path $data "sample_pc.json")
+
+          function Shot($name) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $bmp.Save("shots\$name.png")
+          }
+          New-Item -ItemType Directory -Force shots | Out-Null
+
+          $p = Start-Process fast-lookup\FastLookup.exe -PassThru
+          Start-Sleep 3
+          if ($p.HasExited) { throw "FastLookup.exe exited early with code $($p.ExitCode)" }
+          Shot "1-closed"
+
+          $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
+          [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point ($vs.Right - 1), 400
+          Start-Sleep -Milliseconds 1200
+          Shot "2-hover-open"
+
+          [System.Windows.Forms.SendKeys]::SendWait("testpur")
+          Start-Sleep -Milliseconds 800
+          Shot "3-search"
+
+          [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point 200, 400
+          Start-Sleep -Milliseconds 1500
+          Shot "4-mouse-away-closed"
+
+          if ($p.HasExited) { throw "FastLookup.exe crashed during the test" }
+          Stop-Process $p
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FastLookup-exe
+          path: fast-lookup/FastLookup.exe
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-test-screenshots
+          path: shots/
