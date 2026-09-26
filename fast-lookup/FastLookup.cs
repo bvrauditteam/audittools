@@ -41,12 +41,27 @@ namespace FastLookup
                     return;
                 }
                 try { SetProcessDPIAware(); } catch { }
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+                Application.ThreadException += (s, e) => ReportError(e.Exception);
+                AppDomain.CurrentDomain.UnhandledException += (s, e) => ReportError(e.ExceptionObject as Exception);
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 var form = new SidebarForm(showSignal);
                 Application.Run(form);
                 GC.KeepAlive(mutex);
             }
+        }
+
+        // Errors go to %LOCALAPPDATA%\FastFinanceLookup\error.log so problems can be diagnosed.
+        public static void ReportError(Exception ex)
+        {
+            try
+            {
+                Directory.CreateDirectory(DataStore.AppDir);
+                File.AppendAllText(System.IO.Path.Combine(DataStore.AppDir, "error.log"),
+                    DateTime.Now.ToString("s") + "  " + ex + Environment.NewLine + Environment.NewLine);
+            }
+            catch { }
         }
     }
 

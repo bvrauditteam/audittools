@@ -51,6 +51,25 @@ jobs:
             [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
             [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
             [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+            public delegate bool EnumProc(IntPtr h, IntPtr l);
+            [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr l);
+            [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);
+            public static string Windows(int procId) {
+              var sb = new System.Text.StringBuilder();
+              EnumWindows((h, l) => {
+                uint pid; GetWindowThreadProcessId(h, out pid);
+                if (pid == procId) {
+                  var t = new System.Text.StringBuilder(256); GetWindowText(h, t, 256);
+                  var c = new System.Text.StringBuilder(256); GetClassName(h, c, 256);
+                  RECT r; GetWindowRect(h, out r);
+                  sb.AppendLine("  win " + h + " '" + t + "' class=" + c + " visible=" + IsWindowVisible(h) + " rect=" + r.L + "," + r.T + "," + r.R + "," + r.B);
+                }
+                return true;
+              }, IntPtr.Zero);
+              return sb.ToString();
+            }
             public static string State() {
               var h = FindWindow(null, "Fast Lookup"); RECT r; GetWindowRect(h, out r);
               return "hwnd=" + h + " visible=" + IsWindowVisible(h) + " rect=" + r.L + "," + r.T + "," + r.R + "," + r.B + " foreground=" + (GetForegroundWindow() == h);
@@ -81,6 +100,9 @@ jobs:
           Start-Sleep -Milliseconds 1000
           Shot "5-hotkey"; $open5 = $script:open
 
+          Write-Output "WINDOWS of FastLookup:"; Write-Output ([W]::Windows($p.Id))
+          $log = Join-Path $env:LOCALAPPDATA "FastFinanceLookup\error.log"
+          if (Test-Path $log) { Write-Output "ERROR LOG:"; Get-Content $log | Select-Object -First 40 }
           Write-Output "RESULT closed=$open1 hover=$open2 away=$open4 hotkey=$open5"
           if ($open1) { throw "Sidebar visible before hover" }
           if (-not $open2) { throw "Sidebar did not open on edge hover" }
