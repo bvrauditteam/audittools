@@ -9,7 +9,7 @@ if not exist "%CSC%" (
   if not "%1"=="ci" pause
   exit /b 1
 )
-"%CSC%" /nologo /target:winexe /optimize+ /codepage:65001 /win32icon:app.ico /out:FastLookup.exe /r:System.Windows.Forms.dll /r:System.Drawing.dll FastLookup.cs
+"%CSC%" /nologo /target:winexe /optimize+ /codepage:65001 /win32icon:app.ico /out:FastLookup.exe /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Core.dll /r:System.Xml.dll /r:System.Xml.Linq.dll /r:System.IO.Compression.dll FastLookup.cs
 if errorlevel 1 (
   echo Build failed.
   if not "%1"=="ci" pause

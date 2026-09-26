@@ -2,3 +2,7 @@
 *.json
 data/
 FastLookup.exe
+*.xlsx
+*.xlsm
+*.xls
+*.csv

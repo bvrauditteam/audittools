@@ -11,10 +11,13 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
+using System.Xml.Linq;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Fast Lookup")]
@@ -116,7 +119,7 @@ namespace FastLookup
 
         public static string PrettyName(string file)
         {
-            var n = System.IO.Path.GetFileNameWithoutExtension(file).Replace('_', ' ').Replace('-', ' ').Trim();
+            var n = System.IO.Path.GetFileNameWithoutExtension(file).Replace('_', ' ').Trim();
             return n.Length > 0 ? n : System.IO.Path.GetFileName(file);
         }
 
@@ -157,7 +160,8 @@ namespace FastLookup
             catch (DecoderFallbackException) { return Encoding.GetEncoding(1252).GetString(bytes); }
         }
 
-        // Validates, then copies into the data folder. Same file name replaces the old copy.
+        // Excel/CSV sheets are converted to JSON; JSON files are validated and copied.
+        // Importing the same file (or sheet) again replaces the old copy.
         public static int Import(string[] files, List<string> errors)
         {
             Directory.CreateDirectory(DataDir);
@@ -166,13 +170,41 @@ namespace FastLookup
             {
                 try
                 {
-                    var ds = Load(f);
-                    File.Copy(f, System.IO.Path.Combine(DataDir, System.IO.Path.GetFileName(f)), true);
-                    rows += ds.Rows.Count;
+                    var ext = System.IO.Path.GetExtension(f).ToLowerInvariant();
+                    if (ext == ".json")
+                    {
+                        var ds = Load(f);
+                        File.Copy(f, System.IO.Path.Combine(DataDir, System.IO.Path.GetFileName(f)), true);
+                        rows += ds.Rows.Count;
+                        continue;
+                    }
+
+                    List<Table> tables;
+                    if (ext == ".xlsx" || ext == ".xlsm") tables = ExcelReader.Read(f);
+                    else if (ext == ".csv" || ext == ".txt") tables = new List<Table> { CsvReader.Read(f, ReadText(f)) };
+                    else if (ext == ".xls") throw new Exception("old .xls format. In Excel use File > Save As > Excel Workbook (*.xlsx)");
+                    else throw new Exception("unsupported file type");
+
+                    var baseName = System.IO.Path.GetFileNameWithoutExtension(f);
+                    var withData = tables.Where(t => t.Records.Count > 0).ToList();
+                    if (withData.Count == 0) throw new Exception("no data found (row 1 must have column headings)");
+                    foreach (var t in withData)
+                    {
+                        var name = withData.Count == 1 ? baseName : baseName + " - " + t.Name;
+                        var target = System.IO.Path.Combine(DataDir, SafeFileName(name) + ".json");
+                        File.WriteAllText(target, JsonWriter.Write(t.Records), new UTF8Encoding(false));
+                        rows += t.Records.Count;
+                    }
                 }
                 catch (Exception ex) { errors.Add(System.IO.Path.GetFileName(f) + ": " + ex.Message); }
             }
             return rows;
+        }
+
+        static string SafeFileName(string name)
+        {
+            foreach (var c in System.IO.Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+            return name.Trim();
         }
 
         public static void ClearAll()
@@ -292,6 +324,252 @@ namespace FastLookup
                 }
             }
             throw Err("Unterminated string");
+        }
+    }
+
+    // ===================================================================== Excel / CSV import
+
+    class Table
+    {
+        public string Name;
+        public List<List<KeyValuePair<string, string>>> Records = new List<List<KeyValuePair<string, string>>>();
+
+        // Turns a grid into records. The first non-empty row holds the column headings.
+        public static Table FromGrid(string name, List<List<string>> grid)
+        {
+            var t = new Table { Name = name };
+            List<string> headers = null;
+            foreach (var row in grid)
+            {
+                if (row.All(string.IsNullOrWhiteSpace)) continue;
+                if (headers == null)
+                {
+                    headers = new List<string>();
+                    var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    for (int i = 0; i < row.Count; i++)
+                    {
+                        var h = (row[i] ?? "").Trim();
+                        if (h.Length == 0) h = "Column " + (i + 1);
+                        var unique = h;
+                        for (int n = 2; !used.Add(unique); n++) unique = h + " (" + n + ")";
+                        headers.Add(unique);
+                    }
+                    continue;
+                }
+                var rec = new List<KeyValuePair<string, string>>();
+                for (int i = 0; i < row.Count; i++)
+                {
+                    var v = (row[i] ?? "").Trim();
+                    if (v.Length == 0) continue;
+                    var key = i < headers.Count ? headers[i] : "Column " + (i + 1);
+                    rec.Add(new KeyValuePair<string, string>(key, v));
+                }
+                if (rec.Count > 0) t.Records.Add(rec);
+            }
+            return t;
+        }
+    }
+
+    // Reads .xlsx/.xlsm directly (they are zip files of XML), one Table per worksheet.
+    static class ExcelReader
+    {
+        static readonly XNamespace M = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        static readonly XNamespace R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        static readonly XNamespace PR = "http://schemas.openxmlformats.org/package/2006/relationships";
+
+        public static List<Table> Read(string path)
+        {
+            var tables = new List<Table>();
+            // FileShare.ReadWrite lets this work while the workbook is open in Excel.
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (var zip = new ZipArchive(fs, ZipArchiveMode.Read))
+            {
+                var shared = new List<string>();
+                var sst = Load(zip, "xl/sharedStrings.xml");
+                if (sst != null)
+                {
+                    foreach (var si in sst.Root.Elements(M + "si"))
+                        shared.Add(string.Concat(si.Descendants(M + "t")
+                            .Where(x => x.Parent.Name != M + "rPh")   // skip phonetic hints
+                            .Select(x => x.Value)));
+                }
+
+                var wb = Load(zip, "xl/workbook.xml");
+                var rels = Load(zip, "xl/_rels/workbook.xml.rels");
+                if (wb == null || rels == null) throw new Exception("not a valid Excel workbook");
+                var targets = new Dictionary<string, string>();
+                foreach (var r in rels.Root.Elements(PR + "Relationship"))
+                    targets[(string)r.Attribute("Id")] = (string)r.Attribute("Target");
+
+                foreach (var sheet in wb.Root.Element(M + "sheets").Elements(M + "sheet"))
+                {
+                    string target;
+                    var rid = (string)sheet.Attribute(R + "id");
+                    if (rid == null || !targets.TryGetValue(rid, out target)) continue;
+                    var entry = target.StartsWith("/") ? target.Substring(1) : "xl/" + target;
+                    var doc = Load(zip, entry);
+                    if (doc == null) continue;   // chart sheets etc.
+                    tables.Add(Table.FromGrid((string)sheet.Attribute("name"), ReadGrid(doc, shared)));
+                }
+            }
+            return tables;
+        }
+
+        static XDocument Load(ZipArchive zip, string entryName)
+        {
+            var e = zip.GetEntry(entryName) ?? zip.Entries.FirstOrDefault(x =>
+                string.Equals(x.FullName, entryName, StringComparison.OrdinalIgnoreCase));
+            if (e == null) return null;
+            using (var s = e.Open()) return XDocument.Load(s);
+        }
+
+        static List<List<string>> ReadGrid(XDocument doc, List<string> shared)
+        {
+            var grid = new List<List<string>>();
+            var data = doc.Root.Element(M + "sheetData");
+            if (data == null) return grid;
+            foreach (var row in data.Elements(M + "row"))
+            {
+                var cells = new List<string>();
+                foreach (var c in row.Elements(M + "c"))
+                {
+                    var r = (string)c.Attribute("r");
+                    int col = r != null ? ColumnIndex(r) : cells.Count;
+                    while (cells.Count < col) cells.Add("");
+                    var text = CellText(c, shared);
+                    if (col < cells.Count) cells[col] = text; else cells.Add(text);
+                }
+                grid.Add(cells);
+            }
+            return grid;
+        }
+
+        static int ColumnIndex(string cellRef)
+        {
+            int n = 0;
+            foreach (var ch in cellRef)
+            {
+                if (ch < 'A' || ch > 'Z') break;
+                n = n * 26 + (ch - 'A' + 1);
+            }
+            return Math.Max(0, n - 1);
+        }
+
+        static string CellText(XElement c, List<string> shared)
+        {
+            var type = (string)c.Attribute("t");
+            if (type == "inlineStr")
+                return string.Concat(c.Descendants(M + "t").Select(x => x.Value));
+            var v = c.Element(M + "v");
+            if (v == null) return "";
+            var raw = v.Value;
+            switch (type)
+            {
+                case "s":
+                    int idx;
+                    return int.TryParse(raw, out idx) && idx >= 0 && idx < shared.Count ? shared[idx] : "";
+                case "b": return raw == "1" ? "TRUE" : "FALSE";
+                case "e": return "";
+                case "str": return raw;
+                default:
+                    // Numbers: show 1000000010, not 1.00000001E+9; trim float noise like 0.1000000001.
+                    double d;
+                    if ((raw.IndexOf('E') >= 0 || raw.IndexOf('e') >= 0 || raw.IndexOf('.') >= 0) &&
+                        double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out d))
+                    {
+                        if (Math.Abs(d) < 1e15 && d == Math.Floor(d)) return ((long)d).ToString(CultureInfo.InvariantCulture);
+                        return d.ToString("G15", CultureInfo.InvariantCulture);
+                    }
+                    return raw;
+            }
+        }
+    }
+
+    static class CsvReader
+    {
+        public static Table Read(string path, string text)
+        {
+            // Pick the delimiter that appears most in the first line (Excel uses ; in some regions).
+            int nl = text.IndexOf('\n');
+            var first = nl >= 0 ? text.Substring(0, nl) : text;
+            char delim = ',';
+            int best = first.Count(ch => ch == ',');
+            foreach (var cand in new[] { ';', '\t' })
+            {
+                int n = first.Count(ch => ch == cand);
+                if (n > best) { best = n; delim = cand; }
+            }
+
+            var grid = new List<List<string>>();
+            var row = new List<string>();
+            var field = new StringBuilder();
+            bool quoted = false;
+            for (int i = 0; i < text.Length; i++)
+            {
+                char ch = text[i];
+                if (quoted)
+                {
+                    if (ch == '"')
+                    {
+                        if (i + 1 < text.Length && text[i + 1] == '"') { field.Append('"'); i++; }
+                        else quoted = false;
+                    }
+                    else field.Append(ch);
+                }
+                else if (ch == '"') quoted = true;
+                else if (ch == delim) { row.Add(field.ToString()); field.Length = 0; }
+                else if (ch == '\n' || ch == '\r')
+                {
+                    if (ch == '\r' && i + 1 < text.Length && text[i + 1] == '\n') i++;
+                    row.Add(field.ToString()); field.Length = 0;
+                    grid.Add(row); row = new List<string>();
+                }
+                else field.Append(ch);
+            }
+            if (field.Length > 0 || row.Count > 0) { row.Add(field.ToString()); grid.Add(row); }
+            return Table.FromGrid(System.IO.Path.GetFileNameWithoutExtension(path), grid);
+        }
+    }
+
+    static class JsonWriter
+    {
+        public static string Write(List<List<KeyValuePair<string, string>>> records)
+        {
+            var sb = new StringBuilder("[\n");
+            for (int r = 0; r < records.Count; r++)
+            {
+                sb.Append("  {");
+                for (int i = 0; i < records[r].Count; i++)
+                {
+                    if (i > 0) sb.Append(", ");
+                    Str(sb, records[r][i].Key);
+                    sb.Append(": ");
+                    Str(sb, records[r][i].Value);
+                }
+                sb.Append(r < records.Count - 1 ? "},\n" : "}\n");
+            }
+            return sb.Append("]\n").ToString();
+        }
+
+        static void Str(StringBuilder sb, string s)
+        {
+            sb.Append('"');
+            foreach (var c in s)
+            {
+                switch (c)
+                {
+                    case '"': sb.Append("\\\""); break;
+                    case '\\': sb.Append("\\\\"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (c < ' ') sb.Append("\\u").Append(((int)c).ToString("x4"));
+                        else sb.Append(c);
+                        break;
+                }
+            }
+            sb.Append('"');
         }
     }
 
@@ -709,7 +987,7 @@ namespace FastLookup
             // ---- Menu (shared by the header menu button and the tray icon)
             menu = new ContextMenuStrip();
             menu.Items.Add("Open sidebar", null, delegate { OpenSidebar(true, true); });
-            menu.Items.Add("Import JSON files\u2026", null, delegate { ImportFiles(); });
+            menu.Items.Add("Import Excel / CSV / JSON\u2026", null, delegate { ImportFiles(); });
             menu.Items.Add("Reload data", null, delegate { ReloadData(true); });
             menu.Items.Add("Open data folder", null, delegate
             {
@@ -749,6 +1027,15 @@ namespace FastLookup
             animTimer.Tick += delegate { AnimateStep(); };
             edgeTimer = new System.Windows.Forms.Timer { Interval = 60 };
             edgeTimer.Tick += delegate { WatchMouse(); };
+
+            // Drop Excel/CSV/JSON files onto the sidebar to import them.
+            AllowDrop = true;
+            DragEnter += (s, e) => { if (e.Data.GetDataPresent(DataFormats.FileDrop)) e.Effect = DragDropEffects.Copy; };
+            DragDrop += (s, e) =>
+            {
+                var paths = e.Data.GetData(DataFormats.FileDrop) as string[];
+                if (paths != null && paths.Length > 0) ImportPaths(paths);
+            };
 
             Application.AddMessageFilter(this);
             ReloadData(false);
@@ -999,7 +1286,7 @@ namespace FastLookup
             if (all.Count == 0)
             {
                 countLabel.Text = "";
-                results.SetMessage("No database loaded.\n\nClick \u22EF \u2192 Import JSON files and pick CAO.json, finance_database.json, usernames.json.\nYou only need to do this once.");
+                results.SetMessage("No database loaded.\n\nClick \u22EF \u2192 Import Excel / CSV / JSON, or drag your Excel file onto this panel.\nRow 1 of each sheet must hold the column headings. You only need to do this once.");
                 return;
             }
 
@@ -1073,20 +1360,30 @@ namespace FastLookup
             {
                 using (var dlg = new OpenFileDialog
                 {
-                    Title = "Import lookup JSON files",
-                    Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*",
+                    Title = "Import lookup data",
+                    Filter = "Lookup data (*.xlsx;*.xlsm;*.csv;*.json)|*.xlsx;*.xlsm;*.csv;*.json|Excel workbooks (*.xlsx;*.xlsm)|*.xlsx;*.xlsm|CSV files (*.csv)|*.csv|JSON files (*.json)|*.json|All files (*.*)|*.*",
                     Multiselect = true
                 })
                 {
                     if (dlg.ShowDialog(this) != DialogResult.OK) return;
-                    var errors = new List<string>();
-                    int rows = DataStore.Import(dlg.FileNames, errors);
-                    ReloadData(false);
-                    if (errors.Count > 0) ShowStatus(string.Join(" \u00B7 ", errors.ToArray()), true);
-                    else ShowStatus(string.Format("\u2713 Added {0:N0} records. Total is now {1:N0}.", rows, all.Count), false);
+                    ImportPaths(dlg.FileNames);
                 }
             }
             finally { busy = false; }
+        }
+
+        void ImportPaths(string[] paths)
+        {
+            Cursor = Cursors.WaitCursor;
+            try
+            {
+                var errors = new List<string>();
+                int rows = DataStore.Import(paths, errors);
+                ReloadData(false);
+                if (errors.Count > 0) ShowStatus(string.Join(" \u00B7 ", errors.ToArray()), true);
+                else ShowStatus(string.Format("\u2713 Added {0:N0} records. Total is now {1:N0}.", rows, all.Count), false);
+            }
+            finally { Cursor = Cursors.Default; }
         }
 
         void ClearDatabase()

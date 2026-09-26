@@ -7,7 +7,7 @@ A floating sidebar for looking up profit centers, GL accounts, bank details and 
 - **Pin (📌):** keeps the sidebar open until you unpin it.
 - **Search:** type one or more words. Every word must match somewhere in the row.
 - **Copy:** click any value to copy it. **Enter** copies the first value of the top result.
-- **Menu (⋯, or right-click the tray icon):** Import JSON files, Reload, Open data folder, Clear database, Start with Windows, Exit.
+- **Menu (⋯, or right-click the tray icon):** Import Excel / CSV / JSON, Reload, Open data folder, Clear database, Start with Windows, Exit.
 
 ## Get the exe
 
@@ -20,10 +20,21 @@ Copy `FastLookup.exe` anywhere you like and run it.
 
 ## Data
 
-On first run, choose **⋯ → Import JSON files** and select your files (for example `CAO.json`, `finance_database.json` and `usernames.json`). The app copies them to `%LOCALAPPDATA%\FastFinanceLookup\data`, so you only do this once.
+Import your Excel file directly. There's no need to make JSON first.
 
-- Importing a file with the same name replaces the old copy.
-- A `data` folder placed next to the exe is also read.
-- The files must be JSON arrays of rows, like the old extension used. Excel exports that aren't UTF-8 are handled.
+1. Open the sidebar and choose **⋯ → Import Excel / CSV / JSON**, or drag the file onto the sidebar.
+2. Pick your `.xlsx` or `.xlsm` workbook. Every sheet that has data becomes its own searchable list, named like `Masters - GL`.
 
-**Keep the JSON files out of this repo, because the repo is public.** `.gitignore` already excludes them.
+What your Excel file needs:
+
+- **Row 1 of each sheet holds the column headings**, for example `G/L account | Long Text` or `Region | RO | name | plant | profit center`. Every row below that is one lookup record.
+- Blank rows and empty sheets are skipped. Numbers such as GL accounts come through as plain text (`1000000010`).
+- You can import while the workbook is still open in Excel.
+- For an old `.xls` file, in Excel use **File → Save As → Excel Workbook (.xlsx)** first.
+- `.csv` files work too, whether they use commas or semicolons. So do the `.json` files from the old extension.
+
+When your data changes, import the file again. Each sheet replaces its previous copy.
+
+The app keeps its copy in `%LOCALAPPDATA%\FastFinanceLookup\data`, so everything works offline. A `data` folder placed next to the exe is also read.
+
+**Keep your data files out of this repo, because the repo is public.**
