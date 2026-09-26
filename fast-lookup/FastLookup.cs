@@ -1,5 +1,5 @@
 // Fast Lookup: a floating sidebar for profit centers, GL accounts, bank details and users.
-// Move the mouse to the right edge of the screen to open it, move away to send it back.
+// Rest the mouse on the marked zone of the right screen edge to open it, move away to send it back.
 // Ctrl+Shift+F toggles it. Works fully offline; data lives in %LOCALAPPDATA%\FastFinanceLookup\data.
 //
 // Written in C# 5 so it compiles with the csc.exe that ships with Windows (see build.bat).
@@ -211,6 +211,48 @@ namespace FastLookup
         {
             if (!Directory.Exists(DataDir)) return;
             foreach (var f in Directory.GetFiles(DataDir, "*.json")) File.Delete(f);
+        }
+    }
+
+    // Tiny key=value settings file in %LOCALAPPDATA%\FastFinanceLookup\settings.ini.
+    static class Settings
+    {
+        static readonly string FilePath = System.IO.Path.Combine(DataStore.AppDir, "settings.ini");
+        static Dictionary<string, string> values;
+
+        static void Ensure()
+        {
+            if (values != null) return;
+            values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (!File.Exists(FilePath)) return;
+                foreach (var line in File.ReadAllLines(FilePath))
+                {
+                    int eq = line.IndexOf('=');
+                    if (eq > 0) values[line.Substring(0, eq).Trim()] = line.Substring(eq + 1).Trim();
+                }
+            }
+            catch { }
+        }
+
+        public static string Get(string key, string fallback)
+        {
+            Ensure();
+            string v;
+            return values.TryGetValue(key, out v) ? v : fallback;
+        }
+
+        public static void Set(string key, string value)
+        {
+            Ensure();
+            values[key] = value;
+            try
+            {
+                Directory.CreateDirectory(DataStore.AppDir);
+                File.WriteAllLines(FilePath, values.Select(kv => kv.Key + "=" + kv.Value).ToArray());
+            }
+            catch { }
         }
     }
 
@@ -893,6 +935,12 @@ namespace FastLookup
         int animFrom, animTo, animStart;
         IntPtr previousWindow = IntPtr.Zero;
         Screen screen;
+        readonly EdgeMarker marker;
+        readonly ToolStripMenuItem markerItem;
+        readonly Dictionary<string, ToolStripMenuItem> zoneItems = new Dictionary<string, ToolStripMenuItem>();
+        string zonePosition = Settings.Get("zone", "middle");
+        bool showMarker = Settings.Get("marker", "on") != "off";
+        Rectangle hotZone;
 
         public SidebarForm(EventWaitHandle showSignal)
         {
@@ -996,18 +1044,41 @@ namespace FastLookup
             });
             menu.Items.Add("Clear database\u2026", null, delegate { ClearDatabase(); });
             menu.Items.Add(new ToolStripSeparator());
+            var zoneMenu = new ToolStripMenuItem("Hover zone on right edge");
+            foreach (var z in new[] { "top", "middle", "bottom" })
+            {
+                var pos = z;
+                var item = new ToolStripMenuItem(char.ToUpper(z[0]) + z.Substring(1), null, delegate { SetZone(pos); });
+                zoneItems[z] = item;
+                zoneMenu.DropDownItems.Add(item);
+            }
+            menu.Items.Add(zoneMenu);
+            markerItem = new ToolStripMenuItem("Show edge marker", null, delegate
+            {
+                showMarker = !showMarker;
+                Settings.Set("marker", showMarker ? "on" : "off");
+                UpdateMarker();
+            });
+            menu.Items.Add(markerItem);
             startupItem = new ToolStripMenuItem("Start with Windows", null, delegate { ToggleStartup(); });
             menu.Items.Add(startupItem);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Exit", null, delegate { exiting = true; Close(); });
-            menu.Opening += delegate { busy = true; startupItem.Checked = IsStartupEnabled(); };
+            menu.Opening += delegate
+            {
+                busy = true;
+                startupItem.Checked = IsStartupEnabled();
+                markerItem.Checked = showMarker;
+                foreach (var kv in zoneItems) kv.Value.Checked = kv.Key == zonePosition;
+            };
+            marker = new EdgeMarker();
             menu.Closed += delegate { busy = false; };
             menuButton.Click += delegate { menu.Show(menuButton, new Point(0, menuButton.Height)); };
 
             tray = new NotifyIcon
             {
                 Icon = Icon ?? SystemIcons.Application,
-                Text = "Fast Lookup (right screen edge or Ctrl+Shift+F)",
+                Text = "Fast Lookup (right-edge marker or Ctrl+Shift+F)",
                 ContextMenuStrip = menu,
                 Visible = true
             };
@@ -1073,6 +1144,7 @@ namespace FastLookup
             if (!RegisterHotKey(Handle, HOTKEY_ID, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, (uint)Keys.F))
                 tray.ShowBalloonTip(4000, "Fast Lookup", "Ctrl+Shift+F is used by another program. Use the screen edge or the tray icon.", ToolTipIcon.Warning);
             edgeTimer.Start();
+            UpdateMarker();
             new Thread(() =>
             {
                 while (!exiting)
@@ -1082,7 +1154,7 @@ namespace FastLookup
                 }
             }) { IsBackground = true }.Start();
             tray.ShowBalloonTip(3000, "Fast Lookup is running",
-                "Move the mouse to the right edge of the screen, or press Ctrl+Shift+F.", ToolTipIcon.Info);
+                "Rest the mouse on the purple strip at the right edge of the screen, or press Ctrl+Shift+F.", ToolTipIcon.Info);
         }
 
         protected override void WndProc(ref Message m)
@@ -1116,6 +1188,7 @@ namespace FastLookup
             }
             exiting = true;
             edgeTimer.Stop();
+            marker.Close();
             UnregisterHotKey(Handle, HOTKEY_ID);
             tray.Visible = false;
             tray.Dispose();
@@ -1151,7 +1224,7 @@ namespace FastLookup
             var fg = GetForegroundWindow();
             if (fg != Handle) previousWindow = fg;
 
-            screen = hold ? Screen.FromPoint(Cursor.Position) : RightmostScreenAt(Cursor.Position);
+            screen = hold ? Screen.FromPoint(Cursor.Position) : EdgeScreen();
             var wa = screen.WorkingArea;
             int width = Math.Min(S(420), wa.Width);
             Bounds = new Rectangle(wa.Right, wa.Top, width, wa.Height);
@@ -1159,6 +1232,7 @@ namespace FastLookup
             if (activate) FocusSearch();
             StartAnim(wa.Right - width);
             state = State.Opening;
+            UpdateMarker();
         }
 
         void CloseSidebar()
@@ -1189,6 +1263,7 @@ namespace FastLookup
             animTimer.Stop();
             if (state == State.Opening) state = State.Open;
             else if (state == State.Closing) { state = State.Closed; Hide(); }
+            UpdateMarker();
         }
 
         void FocusSearch()
@@ -1217,9 +1292,40 @@ namespace FastLookup
             ShowStatus(pinned ? "Pinned: stays open until you unpin or press Esc" : "Auto-hide on", false);
         }
 
-        static Screen RightmostScreenAt(Point p)
+        // The monitor whose right edge is the far right of the desktop.
+        static Screen EdgeScreen()
         {
-            return Screen.FromPoint(new Point(p.X - 2, p.Y));
+            Screen best = Screen.PrimaryScreen;
+            foreach (var sc in Screen.AllScreens) if (sc.Bounds.Right > best.Bounds.Right) best = sc;
+            return best;
+        }
+
+        // Only this band of the right edge opens the sidebar (top, middle or bottom).
+        Rectangle ComputeHotZone()
+        {
+            var wa = EdgeScreen().WorkingArea;
+            int h = Math.Min(S(180), wa.Height);
+            int top;
+            if (zonePosition == "top") top = wa.Top + S(60);          // below window close buttons
+            else if (zonePosition == "bottom") top = wa.Bottom - h - S(20);
+            else top = wa.Top + (wa.Height - h) / 2;
+            return new Rectangle(wa.Right - 1, top, 1, h);
+        }
+
+        void SetZone(string pos)
+        {
+            zonePosition = pos;
+            Settings.Set("zone", pos);
+            UpdateMarker();
+            ShowStatus("Hover zone: " + pos + " of the right edge", false);
+            if (state == State.Closed) marker.Flash();
+        }
+
+        void UpdateMarker()
+        {
+            hotZone = ComputeHotZone();
+            bool visible = showMarker && (state == State.Closed || state == State.Closing);
+            marker.Place(new Rectangle(hotZone.Right - S(4), hotZone.Top, S(4), hotZone.Height), visible);
         }
 
         // Polls the cursor: dwell on the right edge opens, leaving the sidebar closes.
@@ -1231,8 +1337,11 @@ namespace FastLookup
 
             if (state == State.Closed || state == State.Closing)
             {
-                var vs = SystemInformation.VirtualScreen;
-                bool atEdge = p.X >= vs.Right - 1 && Control.MouseButtons == MouseButtons.None;
+                var zone = ComputeHotZone();
+                if (zone != hotZone || marker.Visible != (showMarker && state == State.Closed)) UpdateMarker();  // screens changed
+                bool atEdge = p.X >= zone.Left && p.Y >= zone.Top && p.Y < zone.Bottom
+                    && Control.MouseButtons == MouseButtons.None;
+                marker.Highlight(atEdge);
                 if (!atEdge) { edgeSince = 0; return; }
                 if (edgeSince == 0) { edgeSince = now; return; }
                 if (now - edgeSince >= EDGE_DWELL_MS)
@@ -1244,9 +1353,9 @@ namespace FastLookup
             }
 
             if (pinned) { leaveSince = 0; return; }
-            var zone = Bounds;
-            zone.Inflate(S(20), S(4));
-            bool inside = zone.Contains(p);
+            var area = Bounds;
+            area.Inflate(S(20), S(4));
+            bool inside = area.Contains(p);
             if (inside) { holdUntilMouseEnters = false; leaveSince = 0; return; }
             if (holdUntilMouseEnters || Control.MouseButtons != MouseButtons.None) { leaveSince = 0; return; }
             if (leaveSince == 0) { leaveSince = now; return; }
@@ -1425,6 +1534,58 @@ namespace FastLookup
     }
 
     // ===================================================================== Small controls
+
+    // Thin strip showing where the hover zone is. Clicks pass straight through it.
+    class EdgeMarker : Form
+    {
+        const double IdleOpacity = 0.45, HotOpacity = 1.0;
+        readonly System.Windows.Forms.Timer flashTimer = new System.Windows.Forms.Timer { Interval = 1200 };
+
+        public EdgeMarker()
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            TopMost = true;
+            StartPosition = FormStartPosition.Manual;
+            BackColor = Theme.Accent;
+            Opacity = IdleOpacity;
+            flashTimer.Tick += delegate { flashTimer.Stop(); Opacity = IdleOpacity; };
+        }
+
+        protected override bool ShowWithoutActivation { get { return true; } }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                var cp = base.CreateParams;
+                // TOOLWINDOW | LAYERED | TRANSPARENT (click-through) | NOACTIVATE
+                cp.ExStyle |= 0x80 | 0x80000 | 0x20 | 0x08000000;
+                return cp;
+            }
+        }
+
+        public void Place(Rectangle r, bool visible)
+        {
+            if (Bounds != r) Bounds = r;
+            if (visible && !Visible) Show();
+            else if (!visible && Visible) Hide();
+        }
+
+        public void Highlight(bool hot)
+        {
+            if (flashTimer.Enabled) return;
+            double o = hot ? HotOpacity : IdleOpacity;
+            if (Math.Abs(Opacity - o) > 0.01) Opacity = o;
+        }
+
+        public void Flash()
+        {
+            Opacity = HotOpacity;
+            flashTimer.Stop();
+            flashTimer.Start();
+        }
+    }
 
     class GradientPanel : Panel
     {

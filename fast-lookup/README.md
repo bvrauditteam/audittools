@@ -2,7 +2,8 @@
 
 A floating sidebar for looking up profit centers, GL accounts, bank details and user IDs. It works fully offline.
 
-- **Open:** move the mouse to the **right edge of the screen** and hold it there for a moment, or press **Ctrl+Shift+F**, or click the tray icon.
+- **Open:** rest the mouse on the **thin purple strip** on the right edge of the screen for a moment. Or press **Ctrl+Shift+F**, or click the tray icon. The rest of the right edge does nothing, so scrollbars and close buttons work normally.
+- **Move the zone:** choose **⋯ → Hover zone on right edge → Top / Middle / Bottom** (the default is Middle). You can hide the strip with **⋯ → Show edge marker**. Clicks pass through the strip either way.
 - **Close:** move the mouse away and it slides back. You can also press **Esc** or click **»**.
 - **Pin (📌):** keeps the sidebar open until you unpin it.
 - **Search:** type one or more words. Every word must match somewhere in the row.
