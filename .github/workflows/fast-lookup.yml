@@ -36,26 +36,45 @@ jobs:
             $g = [System.Drawing.Graphics]::FromImage($bmp)
             $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
             $bmp.Save("shots\$name.png")
+            # Is the sidebar header (purple) showing near the top-right corner?
+            $px = $bmp.GetPixel($b.Width - 60, 20)
+            $bmp.Dispose()
+            return ($px.B -gt 180 -and $px.R -lt 130 -and $px.G -lt 110)
+          }
+          function LogCrop($name) {
+            # Prints a small JPEG of the sidebar area to the log (base64) for review.
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $w = 460; $h = [Math]::Min(760, $b.Height)
+            $bmp = New-Object System.Drawing.Bitmap $w, $h
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen((New-Object System.Drawing.Point ($b.Width - $w), 0), [System.Drawing.Point]::Empty, $bmp.Size)
+            $ms = New-Object System.IO.MemoryStream
+            $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+            Write-Output "CROP-$name-BEGIN"
+            Write-Output ([Convert]::ToBase64String($ms.ToArray()))
+            Write-Output "CROP-$name-END"
           }
           New-Item -ItemType Directory -Force shots | Out-Null
 
           $p = Start-Process fast-lookup\FastLookup.exe -PassThru
           Start-Sleep 3
           if ($p.HasExited) { throw "FastLookup.exe exited early with code $($p.ExitCode)" }
-          Shot "1-closed"
+          if (Shot "1-closed") { throw "Sidebar visible before hover" }
 
           $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
           [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point ($vs.Right - 1), 400
           Start-Sleep -Milliseconds 1200
-          Shot "2-hover-open"
+          if (-not (Shot "2-hover-open")) { throw "Sidebar did not open on edge hover" }
 
           [System.Windows.Forms.SendKeys]::SendWait("testpur")
           Start-Sleep -Milliseconds 800
-          Shot "3-search"
+          $null = Shot "3-search"
+          LogCrop "search"
 
           [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point 200, 400
           Start-Sleep -Milliseconds 1500
-          Shot "4-mouse-away-closed"
+          if (Shot "4-mouse-away-closed") { throw "Sidebar did not hide after mouse left" }
+          Write-Output "Smoke test passed: opens on hover, hides on leave"
 
           if ($p.HasExited) { throw "FastLookup.exe crashed during the test" }
           Stop-Process $p

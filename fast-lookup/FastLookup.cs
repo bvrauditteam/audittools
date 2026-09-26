@@ -957,7 +957,6 @@ namespace FastLookup
 
         void OnSearchKeyDown(object sender, KeyEventArgs e)
         {
-            holdUntilMouseEnters = holdUntilMouseEnters && Bounds.Contains(Cursor.Position);
             if (e.KeyCode == Keys.Enter)
             {
                 e.SuppressKeyPress = true;
