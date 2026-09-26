@@ -6,3 +6,6 @@ FastLookup.exe
 *.xlsm
 *.xls
 *.csv
+
+# Fake sample used by CI
+!test/sample.xlsx

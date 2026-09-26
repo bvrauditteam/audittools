@@ -22,7 +22,7 @@ using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Fast Lookup")]
 [assembly: System.Reflection.AssemblyProduct("Fast Lookup")]
-[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.3.0.0")]
 
 namespace FastLookup
 {
@@ -30,18 +30,41 @@ namespace FastLookup
     {
         [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
 
+        public const string Version = "1.3";
+
         [STAThread]
-        static void Main()
+        static int Main(string[] args)
         {
-            bool created;
+            // FastLookup.exe --import file.xlsx [more files]: import without opening the sidebar.
+            if (args.Length > 0 && args[0] == "--import")
+            {
+                var errors = new List<string>();
+                var files = new string[args.Length - 1];
+                Array.Copy(args, 1, files, 0, files.Length);
+                DataStore.Import(files, errors);
+                foreach (var e in errors) ReportError(new Exception("Import failed: " + e));
+                return errors.Count == 0 ? 0 : 1;
+            }
+
+            bool created, replaced = false;
             using (var mutex = new Mutex(true, "FastFinanceLookup.SingleInstance", out created))
             using (var showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, "FastFinanceLookup.Show"))
+            using (var exitSignal = new EventWaitHandle(false, EventResetMode.AutoReset, "FastFinanceLookup.Exit"))
             {
                 if (!created)
                 {
-                    // Already running: ask that copy to open its sidebar.
-                    showSignal.Set();
-                    return;
+                    // Another copy is running (maybe an older version): ask it to quit and take over,
+                    // so starting a new exe always runs the new code.
+                    exitSignal.Set();
+                    bool acquired;
+                    try { acquired = mutex.WaitOne(5000); }
+                    catch (AbandonedMutexException) { acquired = true; }
+                    if (!acquired)
+                    {
+                        showSignal.Set();   // the old copy didn't quit (very old version): just show it
+                        return 0;
+                    }
+                    replaced = true;
                 }
                 try { SetProcessDPIAware(); } catch { }
                 Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
@@ -49,10 +72,11 @@ namespace FastLookup
                 AppDomain.CurrentDomain.UnhandledException += (s, e) => ReportError(e.ExceptionObject as Exception);
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                var form = new SidebarForm(showSignal);
+                var form = new SidebarForm(showSignal, exitSignal, replaced);
                 Application.Run(form);
-                GC.KeepAlive(mutex);
+                try { mutex.ReleaseMutex(); } catch { }
             }
+            return 0;
         }
 
         // Errors go to %LOCALAPPDATA%\FastFinanceLookup\error.log so problems can be diagnosed.
@@ -917,7 +941,8 @@ namespace FastLookup
         enum State { Closed, Opening, Open, Closing }
 
         readonly float scale;
-        readonly EventWaitHandle showSignal;
+        readonly EventWaitHandle showSignal, exitSignal;
+        readonly bool openOnStart;
         readonly TextBox search;
         readonly Label countLabel, statusLabel;
         readonly ResultsView results;
@@ -942,9 +967,11 @@ namespace FastLookup
         bool showMarker = Settings.Get("marker", "on") != "off";
         Rectangle hotZone;
 
-        public SidebarForm(EventWaitHandle showSignal)
+        public SidebarForm(EventWaitHandle showSignal, EventWaitHandle exitSignal, bool openOnStart)
         {
             this.showSignal = showSignal;
+            this.exitSignal = exitSignal;
+            this.openOnStart = openOnStart;
             // Don't use CreateGraphics() here: it would create the window handle too early.
             using (var g = Graphics.FromHwnd(IntPtr.Zero)) scale = g.DpiX / 96f;
 
@@ -1034,6 +1061,8 @@ namespace FastLookup
 
             // ---- Menu (shared by the header menu button and the tray icon)
             menu = new ContextMenuStrip();
+            menu.Items.Add(new ToolStripMenuItem("Fast Lookup v" + Program.Version) { Enabled = false });
+            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Open sidebar", null, delegate { OpenSidebar(true, true); });
             menu.Items.Add("Import Excel / CSV / JSON\u2026", null, delegate { ImportFiles(); });
             menu.Items.Add("Reload data", null, delegate { ReloadData(true); });
@@ -1147,13 +1176,21 @@ namespace FastLookup
             UpdateMarker();
             new Thread(() =>
             {
+                var handles = new WaitHandle[] { showSignal, exitSignal };
                 while (!exiting)
                 {
-                    if (!showSignal.WaitOne(1000)) continue;
-                    try { BeginInvoke((Action)(() => OpenSidebar(true, true))); } catch { return; }
+                    int which = WaitHandle.WaitAny(handles, 1000);
+                    if (which == WaitHandle.WaitTimeout) continue;
+                    try
+                    {
+                        if (which == 0) BeginInvoke((Action)(() => OpenSidebar(true, true)));
+                        else { BeginInvoke((Action)(() => { exiting = true; Close(); })); return; }
+                    }
+                    catch { return; }
                 }
             }) { IsBackground = true }.Start();
-            tray.ShowBalloonTip(3000, "Fast Lookup is running",
+            if (openOnStart) BeginInvoke((Action)(() => OpenSidebar(true, true)));
+            tray.ShowBalloonTip(3000, "Fast Lookup " + Program.Version + " is running",
                 "Rest the mouse on the purple strip at the right edge of the screen, or press Ctrl+Shift+F.", ToolTipIcon.Info);
         }
 
@@ -1339,8 +1376,8 @@ namespace FastLookup
             {
                 var zone = ComputeHotZone();
                 if (zone != hotZone || marker.Visible != (showMarker && state == State.Closed)) UpdateMarker();  // screens changed
-                bool atEdge = p.X >= zone.Left && p.Y >= zone.Top && p.Y < zone.Bottom
-                    && Control.MouseButtons == MouseButtons.None;
+                // Works while dragging a file too, so you can drop it straight onto the sidebar.
+                bool atEdge = p.X >= zone.Left && p.Y >= zone.Top && p.Y < zone.Bottom;
                 marker.Highlight(atEdge);
                 if (!atEdge) { edgeSince = 0; return; }
                 if (edgeSince == 0) { edgeSince = now; return; }
@@ -1489,7 +1526,17 @@ namespace FastLookup
                 var errors = new List<string>();
                 int rows = DataStore.Import(paths, errors);
                 ReloadData(false);
-                if (errors.Count > 0) ShowStatus(string.Join(" \u00B7 ", errors.ToArray()), true);
+                if (errors.Count > 0)
+                {
+                    ShowStatus("Import problem, see message", true);
+                    foreach (var e in errors) Program.ReportError(new Exception("Import failed: " + e));
+                    bool wasBusy = busy;
+                    busy = true;
+                    MessageBox.Show(this, "Some files could not be imported:\n\n" + string.Join("\n\n", errors.ToArray()) +
+                        (rows > 0 ? string.Format("\n\nOther files added {0:N0} records.", rows) : ""),
+                        "Fast Lookup", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    busy = wasBusy;
+                }
                 else ShowStatus(string.Format("\u2713 Added {0:N0} records. Total is now {1:N0}.", rows, all.Count), false);
             }
             finally { Cursor = Cursors.Default; }

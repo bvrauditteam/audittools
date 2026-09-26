@@ -17,6 +17,24 @@ jobs:
         shell: cmd
         run: fast-lookup\build.bat ci
 
+      - name: Excel import test
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $p = Start-Process fast-lookup\FastLookup.exe -ArgumentList '--import', 'fast-lookup\test\sample.xlsx' -Wait -PassThru
+          $data = Join-Path $env:LOCALAPPDATA "FastFinanceLookup\data"
+          Get-ChildItem $data | ForEach-Object { Write-Output "  $($_.Name)" }
+          $log = Join-Path $env:LOCALAPPDATA "FastFinanceLookup\error.log"
+          if (Test-Path $log) { Get-Content $log }
+          if ($p.ExitCode -ne 0) { throw "Import exited with code $($p.ExitCode)" }
+          $emp = Get-Content (Join-Path $data "sample - Emp.json") -Raw
+          Write-Output $emp
+          if ($emp -notmatch '"Id": "1", "Name": "Test kumar"') { throw "Emp sheet not converted correctly" }
+          $gl = Get-Content (Join-Path $data "sample - GL.json") -Raw
+          if ($gl -notmatch '"G/L account": "1000000010"') { throw "GL numbers not converted correctly" }
+          Remove-Item (Join-Path $data "*")
+          Write-Output "Excel import test passed"
+
       - name: Smoke test (sample data, edge hover, screenshots)
         shell: powershell
         run: |
@@ -118,7 +136,15 @@ jobs:
           Write-Output "Smoke test passed"
 
           if ($p.HasExited) { throw "FastLookup.exe crashed during the test" }
-          Stop-Process $p
+
+          # Starting the exe again must replace the running copy (so a new version always takes over).
+          $p2 = Start-Process fast-lookup\FastLookup.exe -PassThru
+          Start-Sleep 4
+          $running = @(Get-Process FastLookup -ErrorAction SilentlyContinue)
+          Write-Output "After second start: $($running.Count) running, old exited=$($p.HasExited), new exited=$($p2.HasExited)"
+          if (-not $p.HasExited) { throw "Old instance did not quit on takeover" }
+          if ($p2.HasExited -or $running.Count -ne 1) { throw "New instance is not the only one running" }
+          Stop-Process $p2
 
       - uses: actions/upload-artifact@v4
         with:
