@@ -39,7 +39,8 @@ jobs:
             # Is the sidebar header (purple) showing near the top-right corner?
             $px = $bmp.GetPixel($b.Width - 60, 20)
             $bmp.Dispose()
-            return ($px.B -gt 180 -and $px.R -lt 130 -and $px.G -lt 110)
+            Write-Output "PIXEL $name screen=$($b.Width)x$($b.Height) px=$px"
+            $script:open = ($px.B -gt 180 -and $px.R -lt 130 -and $px.G -lt 110)
           }
           function LogCrop($name) {
             # Prints a small JPEG of the sidebar area to the log (base64) for review.
@@ -59,22 +60,32 @@ jobs:
           $p = Start-Process fast-lookup\FastLookup.exe -PassThru
           Start-Sleep 3
           if ($p.HasExited) { throw "FastLookup.exe exited early with code $($p.ExitCode)" }
-          if (Shot "1-closed") { throw "Sidebar visible before hover" }
+          Shot "1-closed"; LogCrop "closed"; $open1 = $script:open
 
           $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
           [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point ($vs.Right - 1), 400
           Start-Sleep -Milliseconds 1200
-          if (-not (Shot "2-hover-open")) { throw "Sidebar did not open on edge hover" }
+          Shot "2-hover-open"; LogCrop "hover"; $open2 = $script:open
+          $pos = [System.Windows.Forms.Cursor]::Position; Write-Output "cursor=$pos virtual=$vs"
 
           [System.Windows.Forms.SendKeys]::SendWait("testpur")
           Start-Sleep -Milliseconds 800
-          $null = Shot "3-search"
-          LogCrop "search"
+          Shot "3-search"; LogCrop "search"
 
           [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point 200, 400
           Start-Sleep -Milliseconds 1500
-          if (Shot "4-mouse-away-closed") { throw "Sidebar did not hide after mouse left" }
-          Write-Output "Smoke test passed: opens on hover, hides on leave"
+          Shot "4-mouse-away-closed"; $open4 = $script:open
+
+          [System.Windows.Forms.SendKeys]::SendWait("^+f")
+          Start-Sleep -Milliseconds 1000
+          Shot "5-hotkey"; LogCrop "hotkey"; $open5 = $script:open
+
+          Write-Output "RESULT closed=$open1 hover=$open2 away=$open4 hotkey=$open5"
+          if ($open1) { throw "Sidebar visible before hover" }
+          if (-not $open2) { throw "Sidebar did not open on edge hover" }
+          if ($open4) { throw "Sidebar did not hide after mouse left" }
+          if (-not $open5) { throw "Ctrl+Shift+F did not open the sidebar" }
+          Write-Output "Smoke test passed"
 
           if ($p.HasExited) { throw "FastLookup.exe crashed during the test" }
           Stop-Process $p
