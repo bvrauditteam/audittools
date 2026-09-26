@@ -610,7 +610,7 @@ namespace FastLookup
         List<Dataset> datasets = new List<Dataset>();
         List<Record> all = new List<Record>();
         State state = State.Closed;
-        bool pinned, busy, holdUntilMouseEnters, exiting;
+        bool pinned, busy, holdUntilMouseEnters, exiting, started;
         int edgeSince, leaveSince;
         int animFrom, animTo, animStart;
         IntPtr previousWindow = IntPtr.Zero;
@@ -619,7 +619,8 @@ namespace FastLookup
         public SidebarForm(EventWaitHandle showSignal)
         {
             this.showSignal = showSignal;
-            using (var g = CreateGraphics()) scale = g.DpiX / 96f;
+            // Don't use CreateGraphics() here: it would create the window handle too early.
+            using (var g = Graphics.FromHwnd(IntPtr.Zero)) scale = g.DpiX / 96f;
 
             Text = "Fast Lookup";
             FormBorderStyle = FormBorderStyle.None;
@@ -769,9 +770,10 @@ namespace FastLookup
         protected override void SetVisibleCore(bool value)
         {
             // Start hidden; the sidebar only appears when summoned.
-            if (!IsHandleCreated)
+            if (!started)
             {
-                CreateHandle();
+                started = true;
+                if (!IsHandleCreated) CreateHandle();
                 OnCreatedHidden();
                 value = false;
             }
